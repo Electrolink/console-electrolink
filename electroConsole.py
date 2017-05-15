@@ -6,6 +6,8 @@ import re
 from termcolor import colored
 import time
 
+import base64
+
 import readline
 import rlcompleter
 
@@ -29,11 +31,11 @@ def on_message(mqttc, obj, msg):
     a = json.loads(str(msg.payload))
     t = None
     topic = None
-    if (msg.topic == thingName+"/reply"):
+    if (msg.topic == replyTopic):
         topic = colored("\n"+msg.topic, 'green', attrs=['reverse'])
         if (a["requested"] == "ping"):
             alive = True
-            t = colored(thingName +" is alive!", 'green',  attrs=['reverse', 'blink'])
+            t = colored(thingName +" is alive!", 'green', attrs=['reverse', 'blink'])
         else :
             if (waitCallbacks is True):
                 if (a["requested"] == "getCallbacks"):
@@ -52,7 +54,17 @@ def on_message(mqttc, obj, msg):
 
                     waitCallbacks = False
             else :
-                t = colored(json.dumps(a["value"], indent=4, sort_keys=True), 'green')
+                if (a["requested"] == "getFile"):
+                    newFile = open(a["params"][0], "ab")
+                    try :
+                        newFile.write(base64.b64decode(a["value"]))
+                    except :
+                        # Well i'm not base64, i'm just plain text
+                        newFile.write(a["value"])
+                    t = colored(json.dumps(a["msgPart"], indent=4, sort_keys=True), 'green')
+                else:
+                    t = colored(json.dumps(a["value"], indent=4, sort_keys=True), 'green')
+            
     else :
         topic = colored("\n"+msg.topic, 'red', attrs=['reverse'])
         t = colored(a["error"], 'red')
@@ -81,6 +93,7 @@ def extractBetween(start,end,data):
     return re.search(start+'(.*)'+end, data)
 
 def parseInstruction(c):
+
     data = "".join(c.split())
     if ((data == "exit") or (data == "exit()")):
         print("Closing electrolink connexion")
@@ -144,7 +157,7 @@ def parseInstruction(c):
                                 nogo = True
                         index+=1
                     if (nogo is False):
-                        mqttc.publish(thingName+"/command", json.dumps(out))
+                        mqttc.publish(commandTopic, json.dumps(out))
                 except:
                     pass
                 #print(out)
@@ -185,20 +198,21 @@ def input_loop():
     global wlcmMessage
     global waitCallbacks
     global callbacks
+
     c = ''
     while True:
         if (alive == False):
             print("Pinging board with name : "+ thingName +"...")
             #print("No answer? Than your board is not connected")
             out = {"method":"ping", "params":[]}
-            mqttc.publish(thingName+"/command", json.dumps(out))
+            mqttc.publish(commandTopic, json.dumps(out))
             time.sleep(0.5)
             
 
         else :
             if (wlcmMessage == True):
                 out = {"method":"getCallbacks", "params":[]}
-                mqttc.publish(thingName+"/command", json.dumps(out))
+                mqttc.publish(commandTopic, json.dumps(out))
                 while(waitCallbacks is True):
                     time.sleep(0.1)
 
@@ -215,6 +229,20 @@ def input_loop():
 ###########################################################################################################
 # PROGRAM STARTS HERE
 ###########################################################################################################
+
+print("Reading configuration from config.toml file")
+config = ""
+with open('config.toml', 'rb') as configFile:
+    config = toml.load(configFile)
+
+thingName = config["thing"]["device_id"]
+server = config["server"]["ip"]
+port = config["server"]["port"]
+keepalive = config["server"]["keepalive"]
+commandTopic = "mainflux/channels/"+config["thing"]["command_topic"]+"/msg"
+replyTopic = "mainflux/channels/"+config["thing"]["reply_topic"]+"/msg"
+errorTopic = "mainflux/channels/"+config["thing"]["error_topic"]+"/msg"
+
 # If you want to use a specific client id, use
 # mqttc = mqtt.Client("client-id")
 # but note that the client id must be unique on the broker. Leaving the client
@@ -227,19 +255,11 @@ mqttc.on_subscribe = on_subscribe
 # Uncomment to enable debug messages
 #mqttc.on_log = on_log
 
-print("Reading configuration from config.toml file")
-config = ""
-with open('config.toml', 'rb') as configFile:
-    config = toml.load(configFile)
 
-thingName = config["thing"]["targetName"]
-server = config["server"]["ip"]
-port = config["server"]["port"]
-keepalive = config["server"]["keepalive"]
 print("Connecting to :" + server + " on port " + str(port))
 mqttc.connect(server, port, keepalive)
-mqttc.subscribe(thingName+"/reply", 0)
-mqttc.subscribe(thingName+"/error", 0)
+mqttc.subscribe(replyTopic, 0)
+mqttc.subscribe(errorTopic, 0)
 mqttc.loop_start()
 
 
